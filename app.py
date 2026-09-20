@@ -6,6 +6,11 @@ from datetime import datetime
 import streamlit as st
 import streamlit.components.v1 as components
 
+try:
+    from google import genai
+except Exception:
+    genai = None
+
 st.set_page_config(
     page_title="Phật Giáo & Lời Phật Dạy",
     page_icon="🪷",
@@ -25,19 +30,17 @@ st.markdown("""
 h1 { font-size:2.55rem !important; color:#f0d993 !important; }
 h2 { font-size:1.75rem !important; color:#f0d993 !important; }
 h3 { font-size:1.22rem !important; color:#ffffff !important; }
-p, label, .stMarkdown, .stRadio, .stSelectbox { font-size:1.02rem !important; }
 
 [data-testid="stSidebar"] {
     background:#151922;
     border-right:1px solid #2a303b;
-    min-width: 290px;
+    min-width: 300px;
 }
 [data-testid="stSidebar"] .block-container {
-    padding-top: 1rem;
-    padding-left: 1rem;
-    padding-right: 1rem;
+    padding-top:1rem;
+    padding-left:1rem;
+    padding-right:1rem;
 }
-
 .hero {
     padding:22px 26px;
     border-radius:18px;
@@ -46,7 +49,6 @@ p, label, .stMarkdown, .stRadio, .stSelectbox { font-size:1.02rem !important; }
     margin-bottom:16px;
 }
 .hero p { color:#ddd4c2; margin-bottom:0; }
-
 .tip {
     padding:12px 14px;
     border-radius:12px;
@@ -54,7 +56,13 @@ p, label, .stMarkdown, .stRadio, .stSelectbox { font-size:1.02rem !important; }
     border-left:4px solid #d7b35a;
     color:#d7d0c4;
 }
-
+.ai-tip {
+    padding:12px 14px;
+    border-radius:12px;
+    background:#121d20;
+    border-left:4px solid #58b6b0;
+    color:#d7ecea;
+}
 .result-card {
     padding:16px 18px;
     border-radius:16px;
@@ -63,19 +71,11 @@ p, label, .stMarkdown, .stRadio, .stSelectbox { font-size:1.02rem !important; }
     margin-top:12px;
     margin-bottom:8px;
 }
-
 [data-testid="stButton"] button {
     min-height:44px;
     border-radius:10px;
     font-weight:650;
     font-size:0.98rem;
-}
-[data-testid="stFileUploader"] {
-    border-radius:12px;
-}
-.small-note {
-    color:#aaa398;
-    font-size:0.9rem;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -245,6 +245,39 @@ def validate_inputs(use_ref):
 
     return missing
 
+def gemini_text(api_key, instruction):
+    if not api_key:
+        raise ValueError("Chưa có Gemini API Key.")
+    if genai is None:
+        raise RuntimeError("Chưa cài thư viện google-genai.")
+    client = genai.Client(api_key=api_key)
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=instruction,
+    )
+    text = getattr(response, "text", None)
+    if not text:
+        raise RuntimeError("Gemini không trả về nội dung.")
+    return text.strip()
+
+def apply_ai_pack(text):
+    # Gemini is instructed to return 5 labeled lines. Parse conservatively.
+    mapping = {
+        "THEME:": "theme",
+        "SCENE:": "scene",
+        "CAMERA:": "camera",
+        "ANGLE:": "angle",
+        "MESSAGE:": "message",
+    }
+    for line in text.splitlines():
+        raw = line.strip()
+        upper = raw.upper()
+        for prefix, key in mapping.items():
+            if upper.startswith(prefix):
+                value = raw[len(prefix):].strip()
+                if value:
+                    st.session_state[key] = value
+
 # ---------------- HEADER ----------------
 st.markdown("""
 <div class="hero">
@@ -294,16 +327,25 @@ with st.sidebar:
         negative_prompt = NEGATIVE_PRESETS[neg_name]
 
     st.markdown("---")
+    st.subheader("🤖 Gemini AI")
+    api_key = st.text_input(
+        "Gemini API Key",
+        type="password",
+        placeholder="Dán API Key tại đây"
+    )
+    st.caption("API Key chỉ dùng trong phiên hiện tại và không được lưu bởi app.")
+
+    st.markdown("---")
     if st.button("♻️ Reset phiên làm việc", use_container_width=True):
         reset_app()
         st.rerun()
 
     st.markdown("---")
-    st.caption("v1.2 • Polish & Reliability • Không cần API cho chức năng cốt lõi.")
+    st.caption("v1.3 • Gemini AI Assist • Vẫn dùng được không cần API.")
 
 # ---------------- TABS ----------------
-tab_create, tab_templates, tab_history = st.tabs(
-    ["🎬 Tạo Prompt", "📚 Mẫu nhanh", "🕘 Lịch sử"]
+tab_create, tab_ai, tab_templates, tab_history = st.tabs(
+    ["🎬 Tạo Prompt", "🤖 Gemini AI", "📚 Mẫu nhanh", "🕘 Lịch sử"]
 )
 
 # ---------------- CREATE TAB ----------------
@@ -444,7 +486,7 @@ Negative Prompt:
 
     if st.session_state.get("last_prompt"):
         st.markdown(
-            '<div class="result-card"><h3>✅ Prompt hoàn chỉnh</h3><div class="small-note">Có thể sao chép hoặc tải xuống ngay.</div></div>',
+            '<div class="result-card"><h3>✅ Prompt hoàn chỉnh</h3><div>Có thể sao chép hoặc tải xuống ngay.</div></div>',
             unsafe_allow_html=True
         )
 
@@ -466,6 +508,85 @@ Negative Prompt:
                 mime="text/plain",
                 use_container_width=True
             )
+
+# ---------------- GEMINI TAB ----------------
+with tab_ai:
+    st.markdown(
+        '<div class="ai-tip">🤖 Gemini AI là chức năng bổ sung. Không nhập API Key thì toàn bộ chức năng v1.2 vẫn dùng bình thường.</div>',
+        unsafe_allow_html=True
+    )
+    st.markdown("")
+
+    ai_topic = st.text_input(
+        "Ý tưởng / chủ đề muốn Gemini phát triển",
+        placeholder="Ví dụ: Buông xả nhẹ lòng, chùa buổi sớm, biết đủ..."
+    )
+
+    c1, c2 = st.columns(2)
+
+    with c1:
+        if st.button("✨ AI đề xuất bộ nội dung", use_container_width=True):
+            if not api_key:
+                st.error("Vui lòng nhập Gemini API Key ở sidebar.")
+            elif not ai_topic.strip():
+                st.error("Vui lòng nhập một ý tưởng hoặc chủ đề.")
+            else:
+                instruction = f"""
+Bạn là trợ lý sáng tạo nội dung video Phật giáo ngắn.
+Hãy tạo 5 dòng ngắn, phù hợp cho video Google Flow AI 8-10 giây.
+Chủ đề người dùng: {ai_topic.strip()}
+
+Yêu cầu:
+- Trang nghiêm, nhẹ nhàng, không giật gân.
+- Không khẳng định câu nào là trích dẫn nguyên văn từ kinh điển nếu không chắc chắn.
+- Nếu là lời gợi ý, hãy viết như một thông điệp Phật giáo phổ quát.
+- Mỗi mục chỉ một dòng.
+- Trả đúng định dạng sau, không thêm giải thích:
+
+THEME: ...
+SCENE: ...
+CAMERA: ...
+ANGLE: ...
+MESSAGE: ...
+"""
+                try:
+                    result = gemini_text(api_key, instruction)
+                    st.session_state["ai_pack"] = result
+                    apply_ai_pack(result)
+                    st.success("Gemini đã tạo bộ đề xuất.")
+                    st.code(result, language="text")
+                except Exception as e:
+                    st.error(f"Không gọi được Gemini: {e}")
+
+    with c2:
+        if st.button("🪄 AI tối ưu Prompt hiện tại", use_container_width=True):
+            if not api_key:
+                st.error("Vui lòng nhập Gemini API Key ở sidebar.")
+            elif not st.session_state.get("last_prompt"):
+                st.error("Hãy tạo một Prompt trước.")
+            else:
+                instruction = f"""
+Hãy tối ưu Prompt Google Flow AI dưới đây.
+Giữ nguyên ý chính, thời lượng, tỉ lệ, chủ đề, voiceover và các ràng buộc.
+Làm câu lệnh gọn, rõ, điện ảnh, hạn chế mâu thuẫn.
+Không thêm nội dung giật gân.
+Trả về duy nhất Prompt đã tối ưu.
+
+PROMPT:
+{st.session_state["last_prompt"]}
+"""
+                try:
+                    optimized = gemini_text(api_key, instruction)
+                    st.session_state["last_prompt"] = optimized
+                    st.success("Đã tối ưu Prompt bằng Gemini.")
+                    st.code(optimized, language="text")
+                except Exception as e:
+                    st.error(f"Không gọi được Gemini: {e}")
+
+    if st.session_state.get("ai_pack"):
+        st.markdown("### Kết quả AI gần nhất")
+        st.code(st.session_state["ai_pack"], language="text")
+        st.caption("Các gợi ý AI được đưa vào bộ đề xuất của phiên hiện tại.")
 
 # ---------------- TEMPLATES TAB ----------------
 with tab_templates:
@@ -498,6 +619,7 @@ with tab_history:
         st.info("Chưa có Prompt nào trong phiên này.")
     else:
         history_text = []
+
         for item in history:
             with st.expander(
                 f"{item['time']} — {item['theme']} — {item['duration']} — {item['ratio']}"
@@ -518,4 +640,4 @@ with tab_history:
         )
 
 st.markdown("---")
-st.caption("Phật Giáo & Lời Phật Dạy – Streamlit v1.2")
+st.caption("Phật Giáo & Lời Phật Dạy – Streamlit v1.3 • Gemini AI Assist")
